@@ -15,13 +15,13 @@ library(scales)
 #View(load_variables(year = 2010, dataset = "sf1"))
 #View(load_variables(year = 2020, dataset = "pl"))
 
-# Get housing units for 2000
-units_2000 <- get_decennial(geography = "block group",
-                            year = 2000,
-                            state = 06,
+# Get housing units for 2000 (doesn't work with the API)
+#units_2000 <- get_decennial(geography = "block group",
+                            #year = 2000,
+                            #state = 06,
                             #county = 037,
-                            variables =  "H001001",
-                            geometry = T) 
+                            #variables =  "H001001",
+                            #geometry = T) 
 
 # Get housing units for 2010
 units_2010 <- get_decennial(geography = "block group",
@@ -44,7 +44,18 @@ sac_blocks <- blocks(year = 2020,
                      state = 06)
 
 # Interpolate 2000 units to 2020 Census geographies
-new_2000_units <- interpolate_pw(from = units_2000,
+#new_2000_units <- interpolate_pw(from = units_2000,
+                                 #to = units_2020,
+                                 #to_id = "GEOID",
+                                 #weights = sac_blocks,
+                                 #weight_column = "POP20",
+                                 #crs = 3310,
+                                 #extensive = T) %>%
+  #select(GEOID, value) %>%
+  #rename("units_2000" = "value")
+
+# Interpolate 2010 units to 2020 Census geographies
+new_2010_units <- interpolate_pw(from = units_2010,
                                  to = units_2020,
                                  to_id = "GEOID",
                                  weights = sac_blocks,
@@ -52,7 +63,107 @@ new_2000_units <- interpolate_pw(from = units_2000,
                                  crs = 3310,
                                  extensive = T) %>%
   select(GEOID, value) %>%
-  rename("units_2000" = "value")
+  rename("units_2010" = "value")
+
+# Get 2020 units (again)
+new_units_2020 <- get_decennial(geography = "block group",
+                                year = 2020,
+                                state = 06,
+                                #county = 037,
+                                variables =  "H1_001N",
+                                geometry = F) %>%
+  select(GEOID, value) %>%
+  rename("units_2020" = "value")
+
+# Merge all years into a dataframe
+df <- merge(new_2010_units,
+            new_units_2020,
+            by = "GEOID",
+            all = T)
+
+# Calculate change stats for each block group
+df <- df %>%
+  mutate(change = (units_2020 - units_2010)) %>%
+  st_drop_geometry()
+
+# Get access to destinations data from the Caltrans EQI
+EQI <- readRDS("/Users/Username/OneDrive - California Department of Transportation/Documents/Sustainability_Data_Local/EQI_Data/EQI_Project_Screening_App/data/EQI.rds") %>%
+  st_drop_geometry() %>%
+  #filter(COUNTYFP20 == "037") %>%
+  mutate(GEOID = substr(GEOID20, 1, 12)) %>%
+  select(GEOID, TRANSIT_RATIO_JOBS, TRANSIT_RATIO_POIs, PED_RATIO, BIKE_RATIO, POP20) %>%
+  group_by(GEOID) %>%
+  summarise(transit_access_ratio_jobs = weighted.mean(TRANSIT_RATIO_JOBS, POP20, na.rm = T),
+            transit_access_ratio_pois = weighted.mean(TRANSIT_RATIO_POIs, POP20, na.rm = T),
+            bike_ratio_pois = weighted.mean(BIKE_RATIO, POP20, na.rm = T),
+            ped_ratio_pois = weighted.mean(PED_RATIO, POP20, na.rm = T)) %>%
+  mutate(transit_jobs_access_category = as.character(cut(transit_access_ratio_jobs, c(0, .025, .05, .1, .15, .20, .25, .30, .35, .4, .45, .5, .55, .6, .65, .7, .75, .8, .85, .9, .95, 1),
+                                                     c("0 - 2.5%", "2.5 - 5%", "5 - 10%", "10 - 15%", "15 - 20%", "20 - 25%", "25 - 30%", "30 - 35%", "35 - 40%", "40 - 45%", "45 - 50%", "50 - 55%", "55 - 60%", "60 - 65%", "65 - 70%", "70 - 75%", "75 - 80%", "80 - 85%", "85 - 90%", "90 - 95%", "95 - 100%")))) %>%
+  mutate(transit_pois_access_category = as.character(cut(transit_access_ratio_pois, c(0, .025, .05, .1, .15, .20, .25, .30, .35, .4, .45, .5, .55, .6, .65, .7, .75, .8, .85, .9, .95, 1),
+                                                    c("0 - 2.5%", "2.5 - 5%", "5 - 10%", "10 - 15%", "15 - 20%", "20 - 25%", "25 - 30%", "30 - 35%", "35 - 40%", "40 - 45%", "45 - 50%", "50 - 55%", "55 - 60%", "60 - 65%", "65 - 70%", "70 - 75%", "75 - 80%", "80 - 85%", "85 - 90%", "90 - 95%", "95 - 100%")))) %>%
+  mutate(bike_pois_access_category = as.character(cut(bike_ratio_pois, c(0, .05, .1, .15, .20, .25, .30, .35, .4, .45, .5, .55, .6, .65, .7, .75, .8, .85, .9, .95, 1),
+                                                  c("0 - 5%", "5 - 10%", "10 - 15%", "15 - 20%", "20 - 25%", "25 - 30%", "30 - 35%", "35 - 40%", "40 - 45%", "45 - 50%", "50 - 55%", "55 - 60%", "60 - 65%", "65 - 70%", "70 - 75%", "75 - 80%", "80 - 85%", "85 - 90%", "90 - 95%", "95 - 100%")))) %>%
+  mutate(ped_pois_access_category = as.character(cut(ped_ratio_pois, c(0, .05, .1, .15, .20, .25, .30, .35, .4, .45, .5, .55, .6, .65, .7, .75, .8, .85, .9, .95, 1),
+                                                 c("0 - 5%", "5 - 10%", "10 - 15%", "15 - 20%", "20 - 25%", "25 - 30%", "30 - 35%", "35 - 40%", "40 - 45%", "45 - 50%", "50 - 55%", "55 - 60%", "60 - 65%", "65 - 70%", "70 - 75%", "75 - 80%", "80 - 85%", "85 - 90%", "90 - 95%", "95 - 100%"))))
+
+# Merge housing and accessibility data
+df2 <- merge(df,
+             EQI,
+             by = "GEOID",
+             all.x = T) %>%
+  st_drop_geometry() 
+
+# For na/nan values, define as "uncategorized"
+df2$transit_jobs_access_category[is.na(df2$transit_jobs_access_category)] <- "Uncategorized"
+df2$transit_jobs_access_category[is.nan(df2$transit_jobs_access_category)] <- "Uncategorized"
+df2$transit_pois_access_category[is.na(df2$transit_pois_access_category)] <- "Uncategorized"
+df2$transit_pois_access_category[is.nan(df2$transit_pois_access_category)] <- "Uncategorized"
+df2$bike_pois_access_category[is.na(df2$bike_pois_access_category)] <- "Uncategorized"
+df2$bike_pois_access_category[is.nan(df2$bike_pois_access_category)] <- "Uncategorized"
+df2$ped_pois_access_category[is.na(df2$ped_pois_access_category)] <- "Uncategorized"
+df2$ped_pois_access_category[is.nan(df2$ped_pois_access_category)] <- "Uncategorized"
+
+# Export CSV files for each metric
+df_transit_jobs <- df2 %>%
+  group_by(transit_jobs_access_category) %>%
+  summarise(new_units = sum(change, na.rm = T))
+write.csv(df_transit_jobs, "/Users/Username/Downloads/df_transit_jobs.csv", na = "")
+
+df_transit_pois <- df2 %>%
+  group_by(transit_pois_access_category) %>%
+  summarise(new_units = sum(change, na.rm = T))
+write.csv(df_transit_pois, "/Users/Username/Downloads/df_transit_pois.csv", na = "")
+
+df_bike_pois <- df2 %>%
+  group_by(bike_pois_access_category) %>%
+  summarise(new_units = sum(change, na.rm = T))
+write.csv(df_bike_pois, "/Users/Username/Downloads/df_bike_pois.csv", na = "")
+
+df_ped_pois <- df2 %>%
+  group_by(ped_pois_access_category) %>%
+  summarise(new_units = sum(change, na.rm = T))
+write.csv(df_ped_pois, "/Users/Username/Downloads/df_ped_pois.csv", na = "")
+
+### VMT analysis
+# Get housing units for 2010
+units_2010 <- get_decennial(geography = "tract",
+                            year = 2010,
+                            state = 06,
+                            #county = 037,
+                            variables =  "H001001",
+                            geometry = T) 
+
+# Get housing units for 2020
+units_2020 <- get_decennial(geography = "tract",
+                            year = 2020,
+                            state = 06,
+                            #county = 037,
+                            variables =  "H1_001N",
+                            geometry = T) 
+
+# Get 2020 blocks (for spatial interpolation weighting)
+sac_blocks <- blocks(year = 2020,
+                     state = 06)
 
 # Interpolate 2010 units to 2020 Census geographies
 new_2010_units <- interpolate_pw(from = units_2010,
@@ -76,190 +187,36 @@ new_units_2020 <- get_decennial(geography = "tract",
   rename("units_2020" = "value")
 
 # Merge all years into a dataframe
-df <- merge(new_2000_units,
-            new_units_2010,
-            by = "GEOID",
-            all = T)
-
-df <- merge(df,
+df <- merge(new_2010_units,
             new_units_2020,
             by = "GEOID",
             all = T)
 
 # Calculate change stats for each block group
-df2 <- df
-  mutate(change_2000_2010 = units_2010 - units_2000,
-         change_2010_2020 = units_2020 - units_2010,
-         change_2000_2020 = units_2020 - units_2000) %>%
+df <- df %>%
+  mutate(change = (units_2020 - units_2010)) %>%
   st_drop_geometry() %>%
   mutate(customGeo = as.numeric(GEOID))
 
-EQI <- readRDS("/Users/S152973/OneDrive - California Department of Transportation/Documents/Sustainability_Data_Local/EQI_Data/EQI_Project_Screening_App/data/EQI.rds") %>%
-  st_drop_geometry() %>%
-  #filter(COUNTYFP20 == "037") %>%
-  mutate(GEOID = substr(GEOID20, 1, 12)) %>%
-  select(GEOID, TRANSIT_RATIO_JOBS, POP20) %>%
-  group_by(GEOID) %>%
-  summarise(access_ratio = weighted.mean(TRANSIT_RATIO_JOBS, POP20, na.rm = T))
-
-df <- merge(df,
-            EQI,
-            by = "GEOID",
-            all.x = T) %>%
-  st_drop_geometry() %>%
-  mutate(access_category = cut(access_ratio, c(0, .05, .1, .15, .20, .25, .30, .35, .4, .45, .5, .55, .6, .65, .7, .75, .8, .85, .9, .95, 1),
-                               c("0 - 5%", "5 - 10%", "10 - 15%", "15 - 20%", "20 - 25%", "25 - 30%", "30 - 35%", "35 - 40%", "40 - 45%", "45 - 50%", "50 - 55%", "55 - 60%", "60 - 65%", "65 - 70%", "70 - 75%", "75 - 80%", "80 - 85%", "85 - 90%", "90 - 95%", "95 - 100%"))) %>%
-  group_by(access_category) %>%
-  summarise(new_units = sum(change, na.rm = T))
-  
-  
-
-
-write.csv(df, "/Users/S152973/Downloads/access_housing_CA.csv", na = "")
-
-
-pop_2010 <- get_decennial(geography = "block group",
-                          year = 2010,
-                          state = 06,
-                          #county = 037,
-                          variables =  "P012001",
-                          geometry = F) 
-
-pop_2020 <- get_decennial(geography = "block group",
-                          year = 2020,
-                          state = 06,
-                          #county = 037,
-                          variables =  "P1_001N",
-                          geometry = F) 
-
-bg_2010 <- block_groups(year = 2010,
-                        state = 06)
-
-bg_2020 <- block_groups(year = 2020,
-                        state = 06)
-
-df_2010 <- merge(bg_2010,
-                 pop_2010,
-                 by.x = "GEOID10",
-                 by.y = "GEOID",
-                 all.x = T) %>%
-  st_drop_geometry() %>%
-  filter(ALAND10 > 0) %>%
-  mutate(pop_density = value / (as.numeric(ALAND10) * 3.86102e-7)) %>%
-  arrange(desc(pop_density)) %>%
-  mutate(cum_pop_pct = cumsum(value) / sum(value)) %>%
-  mutate(cum_area_pct = cumsum(ALAND10) / sum(ALAND10)) %>%
-  mutate(Year = "2010") %>%
-  select(cum_pop_pct, cum_area_pct, Year)
-
-df_2020 <- merge(bg_2020,
-                 pop_2020,
-                 by.x = "GEOID",
-                 by.y = "GEOID",
-                 all.x = T) %>%
-  st_drop_geometry() %>%
-  filter(ALAND > 0) %>%
-  mutate(pop_density = value / (as.numeric(ALAND) * 3.86102e-7)) %>%
-  arrange(desc(pop_density)) %>%
-  mutate(cum_pop_pct = cumsum(value) / sum(value)) %>%
-  mutate(cum_area_pct = cumsum(ALAND) / sum(ALAND)) %>%
-  mutate(Year = "2020") %>%
-  select(cum_pop_pct, cum_area_pct, Year)
-
-df <- rbind(df_2010, df_2020)
-
-plot <- ggplot(df) +
-  geom_line(aes(x = cum_pop_pct, y = cum_area_pct, color = Year), size = .1, alpha = 1) +
-  scale_y_continuous(labels = percent, breaks = seq(0, 1, by = .1)) +
-  scale_x_continuous(labels = percent, breaks = seq(0, 1, by = .1)) +
-  labs(title = paste0("CA Population Lorenz Curve Comparison"), x = "% of Total Population", y = "% of Total Land Area")
-
-View(load_variables(year = 2021, "acs1"))
-
-
-B25001_001
-
-units_2020 <- get_acs(geography = "block group",
-                      survey = "acs5",
-                      year = 2020,
-                      state = 06,
-                      #county = 037,
-                      variables =  "B25001_001",
-                      geometry = F) %>%
-  select(GEOID, estimate) %>%
-  rename("units_2020" = "estimate")
-
-units_2023 <- get_acs(geography = "block group",
-                      survey = "acs5",
-                      year = 2023,
-                      state = 06,
-                      #county = 037,
-                      variables =  "B25001_001",
-                      geometry = F) %>%
-  select(GEOID, estimate) %>%
-  rename("units_2023" = "estimate")
-
-df <- merge(units_2020,
-            units_2023,
-            by = "GEOID",
-            all = T) %>%
-  mutate(change = units_2023 - units_2020,
-         pct_change = (units_2023 - units_2020) / units_2020)
-
-EQI <- readRDS("/Users/S152973/OneDrive - California Department of Transportation/Documents/Sustainability_Data_Local/EQI_Data/EQI_Project_Screening_App/data/EQI.rds") %>%
-  st_drop_geometry() %>%
-  #filter(COUNTYFP20 == "037") %>%
-  #mutate(GEOID = substr(GEOID20, 1, 12)) %>%
-  select(GEOID20, TRANSIT_RATIO_JOBS, POP20, HOUSING20) %>%
-  #group_by(GEOID) %>%
-  #summarise(access_ratio = weighted.mean(TRANSIT_RATIO_JOBS, POP20, na.rm = T))
-  mutate(access_category = cut(TRANSIT_RATIO_JOBS, c(0, .05, .1, .15, .20, .25, .30, .35, .4, .45, .5, .55, .6, .65, .7, .75, .8, .85, .9, .95, 1),
-                               c("0 - 5%", "5 - 10%", "10 - 15%", "15 - 20%", "20 - 25%", "25 - 30%", "30 - 35%", "35 - 40%", "40 - 45%", "45 - 50%", "50 - 55%", "55 - 60%", "60 - 65%", "65 - 70%", "70 - 75%", "75 - 80%", "80 - 85%", "85 - 90%", "90 - 95%", "95 - 100%"))) %>%
-  group_by(access_category) %>%
-  summarise(units = sum(HOUSING20, na.rm = T),
-            pop = sum(POP20, na.rm = T))
-
-
-df <- merge(df,
-            EQI,
-            by = "GEOID",
-            all.x = T) %>%
-  st_drop_geometry() %>%
-  mutate(access_category = cut(access_ratio, c(0, .05, .1, .15, .20, .25, .30, .35, .4, .45, .5, .55, .6, .65, .7, .75, .8, .85, .9, .95, 1),
-                               c("0 - 5%", "5 - 10%", "10 - 15%", "15 - 20%", "20 - 25%", "25 - 30%", "30 - 35%", "35 - 40%", "40 - 45%", "45 - 50%", "50 - 55%", "55 - 60%", "60 - 65%", "65 - 70%", "70 - 75%", "75 - 80%", "80 - 85%", "85 - 90%", "90 - 95%", "95 - 100%"))) %>%
-  group_by(access_category) %>%
-  summarise(new_units = sum(change, na.rm = T))
-
-
-
-
-write.csv(EQI, "/Users/S152973/Downloads/access_housing_CA_current.csv", na = "")
-
-
-units_2023 <- get_acs(geography = "tract",
-                      survey = "acs5",
-                      year = 2023,
-                      state = 06,
-                      #county = 037,
-                      variables =  "B25001_001",
-                      geometry = F) %>%
-  select(GEOID, estimate) %>%
-  rename("units_2023" = "estimate") %>%
-  mutate(customGeo = as.numeric(GEOID))
-
-### VMT
-VMT <- read_sf("/Users/S152973/Downloads/replica-ca_vmt-02_07_25-vmt_layer/replica-ca_vmt-02_07_25-vmt_layer.shp") %>%
+# Read Replica VMT data from local path
+VMT <- read_sf("/Users/Username/Downloads/replica-ca_vmt-02_07_25-vmt_layer/replica-ca_vmt-02_07_25-vmt_layer.shp") %>%
   mutate(state_code = substr(customGeo, 1, 1)) %>%
   filter(state_code == "6") %>%
   st_drop_geometry() %>%
-  mutate(VMT_Category = cut(resVMT_pc, c(0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 1000),
-                            c("0 - 5", "5 - 10", "10 - 15", "15 - 20", "20 - 25", "25 - 30", "30 - 35", "35 - 40", "40 - 45", "45 - 50", "50 +")))
+  mutate(VMT_Category = as.character(cut(resVMT_pc, c(0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 1000),
+                                     c("0 - 5", "5 - 10", "10 - 15", "15 - 20", "20 - 25", "25 - 30", "30 - 35", "35 - 40", "40 - 45", "45 - 50", "50 +"))))
 
-df <- merge(VMT,
-            df,
+df <- merge(df,
+            VMT,
             by = "customGeo",
-            all.x = T) %>%
+            all.x = T) 
+
+# For na values, define as "uncategorized"
+df$VMT_Category[is.na(df$VMT_Category)] <- "Uncategorized"
+
+# Aggregate by VMT category
+df <- df %>%
   group_by(VMT_Category) %>%
   summarise(HousingUnits = sum(change, na.rm = T))
 
-write.csv(df, "/Users/S152973/Downloads/vmt_housing_change_CA.csv", na = "")
+write.csv(df, "/Users/Username/Downloads/vmt_housing_ca.csv", na = "")
